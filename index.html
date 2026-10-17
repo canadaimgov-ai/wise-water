@@ -374,5 +374,33 @@
   setTimeout(function () { load(function (list) { customers = list; draw(); }); }, 1500);
 })();
 </script>
+  <script>
+(function () {
+  var NAME = 'Eng.Kedir';
+  var OLD_EMAIL = /canadaimgov@gmail\.com/gi;          // the email to replace
+  var PREPARED_BY = /(prepared\s*by\s*:?\s*)([^\s<]+@[^\s<]+)/gi;  // "Prepared by: any email"
+
+  function fix(root) {
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
+    var node;
+    while ((node = walker.nextNode())) {
+      var t = node.nodeValue;
+      if (!t) continue;
+      var n = t.replace(OLD_EMAIL, NAME).replace(PREPARED_BY, '$1' + NAME);
+      if (n !== t) node.nodeValue = n;
+    }
+    root.querySelectorAll && root.querySelectorAll('input,textarea').forEach(function (el) {
+      if (el.value && OLD_EMAIL.test(el.value)) el.value = el.value.replace(OLD_EMAIL, NAME);
+      OLD_EMAIL.lastIndex = 0;
+    });
+  }
+
+  function run() { fix(document.body); }
+
+  run();
+  window.addEventListener('beforeprint', run);                     // before printing / save as PDF
+  new MutationObserver(run).observe(document.body, { childList: true, subtree: true, characterData: true });
+})();
+</script>
 </body>
 </html>
