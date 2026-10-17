@@ -256,5 +256,123 @@
   setTimeout(init, 1000);   // in case your form loads a moment later
 })();
 </script>
+  <script>
+(function () {
+  /* ============ SETTINGS - CHANGE IF NEEDED ============ */
+  // Option A: a URL that returns your unpaid customers as JSON, e.g. [{name, phone, amount}]
+  // Leave empty ('') to use Option B instead.
+  var UNPAID_URL = '';
+  // Option B: with UNPAID_URL empty, the script reads rows on the CURRENT page that
+  // contain one of these words (unpaid, pending...) and a phone number.
+  var UNPAID_WORDS = ['unpaid', 'pending', 'not paid', 'balance', 'due'];
+  var COMPANY = 'Wise Water';
+  var PAY_INFO = 'Please pay via M-PESA/Airtel Money to +254111818220.';
+  /* ====================================================== */
+
+  var STORE = 'wa_reminders_sent';
+  var sent = {};
+  try { sent = JSON.parse(localStorage.getItem(STORE) || '{}'); } catch (e) {}
+  var today = new Date().toISOString().slice(0, 10);
+
+  function fixPhone(p) {
+    p = String(p || '').replace(/[^\d]/g, '');
+    if (/^0[17]\d{8}$/.test(p)) return '254' + p.slice(1);
+    if (/^254[17]\d{8}$/.test(p)) return p;
+    if (/^[17]\d{8}$/.test(p)) return '254' + p;
+    return '';
+  }
+  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) {
+    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+
+  function readFromPage() {
+    var out = [], seen = {};
+    document.querySelectorAll('tr').forEach(function (tr) {
+      var text = tr.innerText || '';
+      var low = text.toLowerCase();
+      if (!UNPAID_WORDS.some(function (w) { return low.indexOf(w) > -1; })) return;
+      var m = text.replace(/[\s-]/g, '').match(/(?:\+?254|0)[17]\d{8}/);
+      if (!m) return;
+      var phone = fixPhone(m[0]);
+      if (!phone || seen[phone]) return;
+      seen[phone] = 1;
+      var cells = tr.querySelectorAll('td');
+      var name = cells.length ? cells[0].innerText.trim() : 'Customer';
+      if (/^\d+$/.test(name) && cells[1]) name = cells[1].innerText.trim();
+      var amt = text.match(/(?:ksh|kes)\.?\s*([\d,]+)/i);
+      out.push({ name: name, phone: phone, amount: amt ? amt[1] : '' });
+    });
+    return out;
+  }
+
+  function load(cb) {
+    if (!UNPAID_URL) return cb(readFromPage());
+    fetch(UNPAID_URL).then(function (r) { return r.json(); }).then(function (d) {
+      var list = Array.isArray(d) ? d : (d.data || d.customers || []);
+      cb(list.map(function (c) {
+        return { name: c.name || c.fullName, phone: fixPhone(c.phone || c.phoneNumber), amount: c.amount || c.balance || c.total || '' };
+      }).filter(function (c) { return c.phone; }));
+    }).catch(function () { cb([]); });
+  }
+
+  function link(c) {
+    var msg = 'Hello ' + c.name + ', this is a friendly reminder from ' + COMPANY + '. ' +
+      (c.amount ? 'You have an unpaid balance of KSh ' + c.amount + '. ' : 'You have an unpaid balance. ') +
+      PAY_INFO + ' Thank you!';
+    return 'https://wa.me/' + c.phone + '?text=' + encodeURIComponent(msg);
+  }
+
+  var btn = document.createElement('button');
+  btn.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:99999;background:#25d366;color:#fff;border:0;' +
+    'border-radius:30px;padding:12px 18px;font-size:15px;font-weight:bold;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.25)';
+  document.body.appendChild(btn);
+
+  var panel = document.createElement('div');
+  panel.style.cssText = 'display:none;position:fixed;right:18px;bottom:70px;z-index:99999;width:340px;max-width:92vw;' +
+    'max-height:70vh;overflow:auto;background:#fff;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.3);font-family:Arial,sans-serif';
+  document.body.appendChild(panel);
+
+  var customers = [];
+
+  function draw() {
+    var due = customers.filter(function (c) { return sent[c.phone] !== today; });
+    btn.textContent = 'WhatsApp unpaid (' + due.length + ')';
+    var html = '<div style="padding:12px 14px;border-bottom:1px solid #eee;font-weight:bold">Unpaid customers</div>';
+    if (!customers.length) html += '<div style="padding:14px;color:#777">No unpaid customers found on this page.</div>';
+    customers.forEach(function (c, i) {
+      var done = sent[c.phone] === today;
+      html += '<div style="padding:10px 14px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;gap:8px">' +
+        '<div style="flex:1"><b>' + esc(c.name) + '</b><br><small style="color:#666">' + esc(c.phone) +
+        (c.amount ? ' &bull; KSh ' + esc(c.amount) : '') + '</small></div>' +
+        (done ? '<span style="color:#2e7d32;font-size:13px">Sent today</span>'
+              : '<a data-i="' + i + '" href="#" style="background:#25d366;color:#fff;padding:7px 12px;border-radius:8px;text-decoration:none;font-size:13px">Send</a>') +
+        '</div>';
+    });
+    if (due.length > 1) html += '<div style="padding:12px 14px"><a id="waNext" href="#" style="display:block;text-align:center;background:#1565c0;color:#fff;padding:10px;border-radius:8px;text-decoration:none">Open next customer</a></div>';
+    panel.innerHTML = html;
+  }
+
+  function markAndOpen(c) {
+    sent[c.phone] = today;
+    try { localStorage.setItem(STORE, JSON.stringify(sent)); } catch (e) {}
+    window.open(link(c), '_blank');
+    draw();
+  }
+
+  panel.addEventListener('click', function (e) {
+    var a = e.target.closest('a'); if (!a) return;
+    e.preventDefault();
+    if (a.id === 'waNext') {
+      var next = customers.filter(function (c) { return sent[c.phone] !== today; })[0];
+      if (next) markAndOpen(next);
+    } else if (a.dataset.i != null) markAndOpen(customers[+a.dataset.i]);
+  });
+  btn.addEventListener('click', function () {
+    load(function (list) { customers = list; draw(); panel.style.display = panel.style.display === 'none' ? 'block' : 'none'; });
+  });
+
+  load(function (list) { customers = list; draw(); });
+  setTimeout(function () { load(function (list) { customers = list; draw(); }); }, 1500);
+})();
+</script>
 </body>
 </html>
