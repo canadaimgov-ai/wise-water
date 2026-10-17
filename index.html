@@ -173,5 +173,88 @@
   <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@5.0.8/dist/jspdf.plugin.autotable.min.js"></script>
   <script src="config.js?v=20261017"></script>
   <script src="app.js?v=20261017"></script>
+  <script>
+(function () {
+  // Finds your customer dropdown. If yours isn't found, put its id here, e.g. '#customer_id'
+  var SELECTOR = 'select[name*="customer" i], select[id*="customer" i]';
+
+  function init() {
+    var sel = document.querySelector(SELECTOR);
+    if (!sel || sel.dataset.searchAdded) return;
+    sel.dataset.searchAdded = '1';
+
+    var wrap = document.createElement('div');
+    wrap.style.cssText = 'position:relative;width:100%';
+    var box = document.createElement('input');
+    box.type = 'text';
+    box.autocomplete = 'off';
+    box.placeholder = 'Search customer: type phone or name...';
+    box.className = sel.className;
+    box.style.cssText = 'width:100%;box-sizing:border-box;padding:8px 10px';
+    var list = document.createElement('div');
+    list.style.cssText = 'display:none;position:absolute;left:0;right:0;top:100%;z-index:9999;background:#fff;' +
+      'border:1px solid #bbb;border-radius:6px;max-height:240px;overflow:auto;box-shadow:0 6px 16px rgba(0,0,0,.15)';
+    wrap.appendChild(box);
+    wrap.appendChild(list);
+    sel.parentNode.insertBefore(wrap, sel);
+    sel.style.display = 'none';           // hidden, but your form still uses it
+
+    var matches = [], active = -1;
+
+    function render() {
+      var q = box.value.trim().toLowerCase();
+      var qd = q.replace(/[\s-]/g, '');
+      sel.value = '';                      // clear old choice while typing
+      if (!q) { list.style.display = 'none'; return; }
+      matches = Array.prototype.filter.call(sel.options, function (o) {
+        if (!o.value) return false;
+        var text = (o.text + ' ' + (o.dataset.phone || '')).toLowerCase();
+        return text.indexOf(q) > -1 || text.replace(/[\s-]/g, '').indexOf(qd) > -1;
+      }).slice(0, 10);
+      active = matches.length ? 0 : -1;
+      list.innerHTML = matches.length
+        ? matches.map(function (o, i) {
+            return '<div data-i="' + i + '" style="padding:9px 12px;cursor:pointer;border-bottom:1px solid #eee;' +
+              (i === 0 ? 'background:#e3f2fd' : '') + '">' + o.text.replace(/</g, '&lt;') + '</div>';
+          }).join('')
+        : '<div style="padding:9px 12px;color:#888">No customer found</div>';
+      list.style.display = 'block';
+    }
+
+    function choose(i) {
+      var o = matches[i];
+      if (!o) return;
+      sel.value = o.value;
+      sel.dispatchEvent(new Event('change', { bubbles: true }));   // tells your system a customer was picked
+      box.value = o.text;
+      list.style.display = 'none';
+    }
+
+    box.addEventListener('input', render);
+    box.addEventListener('keydown', function (e) {
+      var items = list.querySelectorAll('[data-i]');
+      if (!items.length) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        active = (active + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+        for (var k = 0; k < items.length; k++) items[k].style.background = k === active ? '#e3f2fd' : '';
+        items[active].scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'Enter') { e.preventDefault(); choose(active); }
+      else if (e.key === 'Escape') { list.style.display = 'none'; }
+    });
+    list.addEventListener('mousedown', function (e) {
+      var el = e.target.closest('[data-i]');
+      if (el) choose(+el.dataset.i);
+    });
+    document.addEventListener('click', function (e) {
+      if (!wrap.contains(e.target)) list.style.display = 'none';
+    });
+  }
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+  setTimeout(init, 1000);   // in case your form loads a moment later
+})();
+</script>
 </body>
 </html>
