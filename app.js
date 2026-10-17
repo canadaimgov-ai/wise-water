@@ -299,8 +299,8 @@ async function viewDashboard() {
   const first = ((state.profile.full_name || '').trim().split(/\s+/)[0]) || '';
 
   set(`
-    <div class="card hero"><div><h1>${greeting()}${first ? ', ' + esc(first) : ''}</h1>
-      <p>${esc(fmtLong(t))}</p></div>
+    <div class="card hero"><div><h1>Welcome to ${esc(state.biz.business_name || 'Wise Water')}</h1>
+      <p>${greeting()}${first && !first.includes('@') ? ', ' + esc(first) : ''} | ${esc(fmtLong(t))}</p></div>
       <div class="hero-actions"><a class="btn light" href="#sell">${ic('cart')}New sale</a><a class="btn light" href="#payment">${ic('wallet')}Receive payment</a></div></div>
 
     <div class="grid g3">
