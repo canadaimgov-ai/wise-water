@@ -1,179 +1,83 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>New Sale</title>
-<style>
-  body{font-family:Arial,sans-serif;background:#f4f8fc;margin:0;padding:20px;color:#0b2545}
-  .card{max-width:620px;margin:auto;background:#fff;padding:24px;border-radius:14px;box-shadow:0 4px 20px rgba(21,101,192,.1)}
-  h2{margin-top:0;color:#1565c0}
-  label{display:block;margin:16px 0 6px;font-weight:bold}
-  input,select{width:100%;padding:11px;border:1px solid #c9d6e4;border-radius:8px;font-size:15px;box-sizing:border-box}
-  .search-wrap{position:relative}
-  #results{display:none;position:absolute;left:0;right:0;top:100%;z-index:50;background:#fff;border:1px solid #c9d6e4;
-           border-radius:8px;max-height:260px;overflow:auto;box-shadow:0 6px 16px rgba(0,0,0,.12)}
-  .item{padding:10px 12px;cursor:pointer;border-bottom:1px solid #eef2f7}
-  .item small{color:#667}
-  .item:hover,.item.active{background:#e3f2fd}
-  .none{padding:10px 12px;color:#888}
-  .chosen{margin-top:8px;padding:8px 12px;background:#e8f5e9;border-radius:8px;display:none}
-  .row{display:flex;gap:10px}.row>div{flex:1}
-  .total{font-size:22px;font-weight:bold;color:#1565c0;margin:20px 0 10px;text-align:right}
-  button{width:100%;padding:13px;background:#2e7d32;color:#fff;border:0;border-radius:10px;font-size:16px;font-weight:bold;cursor:pointer}
-  button:disabled{background:#9bb;cursor:not-allowed}
-  #msg{margin-top:14px;padding:10px;border-radius:8px;display:none}
-</style>
-</head>
-<body>
-<div class="card">
-  <h2>New Sale</h2>
-
-  <label for="customerSearch">Customer</label>
-  <div class="search-wrap">
-    <input id="customerSearch" type="text" autocomplete="off" placeholder="Type name or phone number..." autofocus>
-    <div id="results"></div>
-  </div>
-  <div id="chosen" class="chosen"></div>
-  <input type="hidden" id="customerId">
-
-  <label for="product">Product</label>
-  <select id="product"></select>
-
-  <div class="row">
-    <div><label for="qty">Quantity</label><input id="qty" type="number" min="1" value="1"></div>
-    <div><label for="payment">Payment</label>
-      <select id="payment">
-        <option value="cash">Cash</option>
-        <option value="mpesa">M-PESA</option>
-        <option value="airtel">Airtel Money</option>
-        <option value="later">Pay later</option>
-      </select>
-    </div>
-  </div>
-
-  <div class="total">Total: KSh <span id="total">0</span></div>
-  <button id="saveBtn" disabled>Record Sale</button>
-  <div id="msg"></div>
-</div>
-
 <script>
-/* ===================== SETTINGS - CHANGE THESE ===================== */
-const CUSTOMERS_URL = '/api/customers';   // URL that returns your customers (JSON list)
-const SAVE_URL      = '/api/sales';       // URL that receives the new sale (POST)
-// Field names in YOUR customer data. Change if yours are different:
-const F = { id: 'id', name: 'name', phone: 'phone' };
+(function () {
+  // Finds your customer dropdown. If yours isn't found, put its id here, e.g. '#customer_id'
+  var SELECTOR = 'select[name*="customer" i], select[id*="customer" i]';
 
-// Your products. Edit names and prices:
-const PRODUCTS = [
-  { id: 1, name: '20L Refill',               price: 150 },
-  { id: 2, name: '20L New Bottle with Water', price: 350 },
-  { id: 3, name: 'Wholesale Refill',         price: 80  },
-  { id: 4, name: 'Wholesale New Bottle',     price: 280 },
-  { id: 5, name: '500ml Pack',               price: 30  },
-  { id: 6, name: '1L Pack',                  price: 50  },
-  { id: 7, name: '1.5L Pack',                price: 70  }
-];
-/* =================================================================== */
+  function init() {
+    var sel = document.querySelector(SELECTOR);
+    if (!sel || sel.dataset.searchAdded) return;
+    sel.dataset.searchAdded = '1';
 
-// Sample customers, only used if your customer URL can't be reached
-let customers = [
-  { id: 1, name: 'Jane Wanjiku',  phone: '0712345678' },
-  { id: 2, name: 'John Otieno',   phone: '0723456789' },
-  { id: 3, name: 'Amina Hassan',  phone: '0734567890' },
-  { id: 4, name: 'Peter Kamau',   phone: '0745678901' },
-  { id: 5, name: 'Grace Achieng', phone: '0756789012' }
-];
+    var wrap = document.createElement('div');
+    wrap.style.cssText = 'position:relative;width:100%';
+    var box = document.createElement('input');
+    box.type = 'text';
+    box.autocomplete = 'off';
+    box.placeholder = 'Search customer: type phone or name...';
+    box.className = sel.className;
+    box.style.cssText = 'width:100%;box-sizing:border-box;padding:8px 10px';
+    var list = document.createElement('div');
+    list.style.cssText = 'display:none;position:absolute;left:0;right:0;top:100%;z-index:9999;background:#fff;' +
+      'border:1px solid #bbb;border-radius:6px;max-height:240px;overflow:auto;box-shadow:0 6px 16px rgba(0,0,0,.15)';
+    wrap.appendChild(box);
+    wrap.appendChild(list);
+    sel.parentNode.insertBefore(wrap, sel);
+    sel.style.display = 'none';           // hidden, but your form still uses it
 
-const $ = id => document.getElementById(id);
-const box = $('customerSearch'), results = $('results'), chosen = $('chosen');
-let matches = [], activeIndex = -1;
+    var matches = [], active = -1;
 
-function esc(t){ return String(t ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
-const nameOf = c => c[F.name], phoneOf = c => c[F.phone], idOf = c => c[F.id];
+    function render() {
+      var q = box.value.trim().toLowerCase();
+      var qd = q.replace(/[\s-]/g, '');
+      sel.value = '';                      // clear old choice while typing
+      if (!q) { list.style.display = 'none'; return; }
+      matches = Array.prototype.filter.call(sel.options, function (o) {
+        if (!o.value) return false;
+        var text = (o.text + ' ' + (o.dataset.phone || '')).toLowerCase();
+        return text.indexOf(q) > -1 || text.replace(/[\s-]/g, '').indexOf(qd) > -1;
+      }).slice(0, 10);
+      active = matches.length ? 0 : -1;
+      list.innerHTML = matches.length
+        ? matches.map(function (o, i) {
+            return '<div data-i="' + i + '" style="padding:9px 12px;cursor:pointer;border-bottom:1px solid #eee;' +
+              (i === 0 ? 'background:#e3f2fd' : '') + '">' + o.text.replace(/</g, '&lt;') + '</div>';
+          }).join('')
+        : '<div style="padding:9px 12px;color:#888">No customer found</div>';
+      list.style.display = 'block';
+    }
 
-// Load your real customers (falls back to the samples above)
-fetch(CUSTOMERS_URL).then(r => r.json()).then(data => {
-  const list = Array.isArray(data) ? data : (data.data || data.customers || []);
-  if (list.length) customers = list;
-}).catch(() => {});
+    function choose(i) {
+      var o = matches[i];
+      if (!o) return;
+      sel.value = o.value;
+      sel.dispatchEvent(new Event('change', { bubbles: true }));   // tells your system a customer was picked
+      box.value = o.text;
+      list.style.display = 'none';
+    }
 
-// Products dropdown
-$('product').innerHTML = PRODUCTS.map(p => `<option value="${p.id}">${esc(p.name)} - KSh ${p.price}</option>`).join('');
-
-function render() {
-  const q = box.value.trim().toLowerCase();
-  const qDigits = q.replace(/\s|-/g, '');
-  $('customerId').value = ''; chosen.style.display = 'none'; updateButton();
-  if (!q) { results.style.display = 'none'; return; }
-
-  matches = customers.filter(c =>
-    String(nameOf(c) || '').toLowerCase().includes(q) ||
-    String(phoneOf(c) || '').replace(/\s|-/g, '').includes(qDigits)
-  ).slice(0, 10);
-  activeIndex = matches.length ? 0 : -1;
-
-  results.innerHTML = matches.length
-    ? matches.map((c, i) => `<div class="item ${i === 0 ? 'active' : ''}" data-i="${i}"><b>${esc(nameOf(c))}</b><br><small>${esc(phoneOf(c))}</small></div>`).join('')
-    : '<div class="none">No customer found</div>';
-  results.style.display = 'block';
-}
-
-function choose(i) {
-  const c = matches[i]; if (!c) return;
-  $('customerId').value = idOf(c);
-  box.value = nameOf(c) + ' - ' + phoneOf(c);
-  chosen.textContent = 'Selected: ' + nameOf(c) + ' (' + phoneOf(c) + ')';
-  chosen.style.display = 'block';
-  results.style.display = 'none';
-  updateButton();
-}
-
-box.addEventListener('input', render);
-box.addEventListener('keydown', e => {
-  const items = results.querySelectorAll('.item'); if (!items.length) return;
-  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-    e.preventDefault();
-    activeIndex = (activeIndex + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
-    items.forEach((el, i) => el.classList.toggle('active', i === activeIndex));
-    items[activeIndex].scrollIntoView({ block: 'nearest' });
-  } else if (e.key === 'Enter') { e.preventDefault(); choose(activeIndex); }
-  else if (e.key === 'Escape') { results.style.display = 'none'; }
-});
-results.addEventListener('mousedown', e => { const el = e.target.closest('.item'); if (el) choose(+el.dataset.i); });
-document.addEventListener('click', e => { if (!e.target.closest('.search-wrap')) results.style.display = 'none'; });
-
-// Total + button
-function currentProduct(){ return PRODUCTS.find(p => String(p.id) === $('product').value); }
-function updateTotal(){ $('total').textContent = (currentProduct().price * (+$('qty').value || 0)); }
-function updateButton(){ $('saveBtn').disabled = !($('customerId').value && +$('qty').value >= 1); }
-$('product').addEventListener('change', updateTotal);
-$('qty').addEventListener('input', () => { updateTotal(); updateButton(); });
-updateTotal();
-
-// Save sale
-$('saveBtn').addEventListener('click', async () => {
-  const sale = {
-    customerId: $('customerId').value,
-    productId: currentProduct().id,
-    productName: currentProduct().name,
-    quantity: +$('qty').value,
-    total: +$('total').textContent,
-    payment: $('payment').value,
-    paid: $('payment').value !== 'later'
-  };
-  const msg = $('msg'); msg.style.display = 'block';
-  try {
-    const r = await fetch(SAVE_URL, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(sale) });
-    if (!r.ok) throw new Error();
-    msg.style.background = '#e8f5e9'; msg.style.color = '#1b5e20'; msg.textContent = 'Sale recorded successfully.';
-  } catch (err) {
-    msg.style.background = '#fff3e0'; msg.style.color = '#e65100';
-    msg.textContent = 'Could not reach SAVE_URL. Change it in the settings at the top of the script.';
-    console.log('Sale data:', sale);
+    box.addEventListener('input', render);
+    box.addEventListener('keydown', function (e) {
+      var items = list.querySelectorAll('[data-i]');
+      if (!items.length) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        active = (active + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+        for (var k = 0; k < items.length; k++) items[k].style.background = k === active ? '#e3f2fd' : '';
+        items[active].scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'Enter') { e.preventDefault(); choose(active); }
+      else if (e.key === 'Escape') { list.style.display = 'none'; }
+    });
+    list.addEventListener('mousedown', function (e) {
+      var el = e.target.closest('[data-i]');
+      if (el) choose(+el.dataset.i);
+    });
+    document.addEventListener('click', function (e) {
+      if (!wrap.contains(e.target)) list.style.display = 'none';
+    });
   }
-  box.value = ''; $('customerId').value = ''; chosen.style.display = 'none'; $('qty').value = 1; updateTotal(); updateButton(); box.focus();
-});
+
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+  setTimeout(init, 1000);   // in case your form loads a moment later
+})();
 </script>
-</body>
-</html>
