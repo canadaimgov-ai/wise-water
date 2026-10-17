@@ -182,8 +182,10 @@
   var NAME = 'Eng.kedir.J';
   var EMAIL = /canadaimgov@gmail\.com/gi;
 
+  var SERVED = 'Wise Water';   // shown instead of the email in the "Served by" column
   function fixStr(s) {
-    return (typeof s === 'string' && /prepared/i.test(s)) ? s.replace(EMAIL, NAME) : s;
+    if (typeof s !== 'string') return s;
+    return /prepared/i.test(s) ? s.replace(EMAIL, NAME) : s.replace(EMAIL, SERVED);
   }
   function fixArg(t) { return Array.isArray(t) ? t.map(fixStr) : fixStr(t); }
 
@@ -239,6 +241,7 @@
   /* ===================== SETTINGS ===================== */
   var NAME = 'Eng.kedir.J';                       // name shown instead of the email
   var OLD_EMAIL = 'canadaimgov@gmail.com';        // email to replace
+  var SERVED_BY = 'Wise Water';                   // shown instead of the email under "Served by"
   var COMPANY = 'Wise Water';
   var PAY_INFO = 'Please pay via M-PESA/Airtel Money to +254111818220.';
   var UNPAID_WORDS = ['unpaid', 'pending', 'not paid', 'owes', 'balance', 'due', 'credit'];
@@ -401,6 +404,33 @@
     }
   }
 
+  /* "Served by" column (and the Daily report page): email -> Wise Water */
+  function replaceEmailIn(root, to) {
+    var re = new RegExp(OLD_EMAIL.replace(/\./g, '\\.'), 'gi');
+    var w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null), n;
+    while ((n = w.nextNode())) {
+      var v = n.nodeValue;
+      if (!v || v.toLowerCase().indexOf(OLD_EMAIL) === -1) continue;
+      var host = n.parentElement;
+      if (!host || /^(INPUT|TEXTAREA|SCRIPT|STYLE|OPTION)$/.test(host.tagName)) continue;
+      if (/prepared/i.test(host.textContent)) continue;      // handled above (shows the person's name)
+      n.nodeValue = v.replace(re, to);
+    }
+  }
+  function fixServedBy() {
+    if (!view) return;
+    view.querySelectorAll('table').forEach(function (t) {
+      var idx = -1;
+      t.querySelectorAll('th').forEach(function (th, i) { if (/served\s*by/i.test(th.textContent)) idx = i; });
+      if (idx < 0) return;
+      t.querySelectorAll('tr').forEach(function (tr) {
+        var td = tr.children[idx];
+        if (td && td.tagName === 'TD') replaceEmailIn(td, SERVED_BY);
+      });
+    });
+    if (/^#daily/i.test(location.hash)) replaceEmailIn(view, SERVED_BY);   // whole Daily report page
+  }
+
   /* =====================================================
      3. WHATSAPP: unpaid customers
      ===================================================== */
@@ -515,6 +545,7 @@
   function runAll() {
     scanCustomers();
     fixPreparedText();
+    fixServedBy();
     unpaid = readUnpaid();
     drawWa();
     showWaOnlyWhenLoggedIn();
