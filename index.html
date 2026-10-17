@@ -171,53 +171,174 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.117.0/dist/umd/supabase.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf@4.2.1/dist/jspdf.umd.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jspdf-autotable@5.0.8/dist/jspdf.plugin.autotable.min.js"></script>
+
+  <!-- ============================================================
+       PDF NAME FIX  (must stay here: after jsPDF, before app.js)
+       Changes the "Prepared ... by <email>" line in every PDF report.
+       To change the name, edit NAME below.
+       ============================================================ -->
+  <script id="ww-pdf-name">
+(function () {
+  var NAME = 'Eng.kedir.J';
+  var EMAIL = /canadaimgov@gmail\.com/gi;
+
+  function fixStr(s) {
+    return (typeof s === 'string' && /prepared/i.test(s)) ? s.replace(EMAIL, NAME) : s;
+  }
+  function fixArg(t) { return Array.isArray(t) ? t.map(fixStr) : fixStr(t); }
+
+  var ns = window.jspdf;
+  if (!ns || !ns.jsPDF || ns.jsPDF.__wwWrapped) return;
+  var Orig = ns.jsPDF;
+
+  function Wrapped() {
+    var doc = Reflect.construct(Orig, Array.prototype.slice.call(arguments));
+    var rawText = doc.text;
+    doc.text = function (text) {
+      arguments[0] = fixArg(text);
+      return rawText.apply(this, arguments);
+    };
+    var rawProps = doc.setProperties;
+    if (rawProps) {
+      doc.setProperties = function (p) {
+        if (p && typeof p === 'object') {
+          var c = {};
+          Object.keys(p).forEach(function (k) { c[k] = typeof p[k] === 'string' ? p[k].replace(EMAIL, NAME) : p[k]; });
+          arguments[0] = c;
+        }
+        return rawProps.apply(this, arguments);
+      };
+    }
+    return doc;
+  }
+  Wrapped.prototype = Orig.prototype;
+  Object.getOwnPropertyNames(Orig).forEach(function (k) {
+    if (k === 'prototype' || k === 'length' || k === 'name') return;
+    try { Wrapped[k] = Orig[k]; } catch (e) {}
+  });
+  Wrapped.__wwWrapped = true;
+
+  try { ns.jsPDF = Wrapped; } catch (e) {
+    try { Object.defineProperty(ns, 'jsPDF', { value: Wrapped, configurable: true }); } catch (e2) {}
+  }
+  if (window.jsPDF) { try { window.jsPDF = Wrapped; } catch (e3) {} }
+})();
+  </script>
+
   <script src="config.js?v=20261017"></script>
   <script src="app.js?v=20261017"></script>
-  <script>
-(function () {
-  // Finds your customer dropdown. If yours isn't found, put its id here, e.g. '#customer_id'
-  var SELECTOR = 'select[name*="customer" i], select[id*="customer" i]';
 
-  function init() {
-    var sel = document.querySelector(SELECTOR);
-    if (!sel || sel.dataset.searchAdded) return;
-    sel.dataset.searchAdded = '1';
+  <!-- ============================================================
+       ADD-ONS: 1) customer search   2) "Prepared by" name on screen
+                3) WhatsApp unpaid-customer reminders
+       ============================================================ -->
+  <script id="ww-addons">
+(function () {
+  'use strict';
+
+  /* ===================== SETTINGS ===================== */
+  var NAME = 'Eng.kedir.J';                       // name shown instead of the email
+  var OLD_EMAIL = 'canadaimgov@gmail.com';        // email to replace
+  var COMPANY = 'Wise Water';
+  var PAY_INFO = 'Please pay via M-PESA/Airtel Money to +254111818220.';
+  var UNPAID_WORDS = ['unpaid', 'pending', 'not paid', 'owes', 'balance', 'due', 'credit'];
+  /* ==================================================== */
+
+  var view = document.getElementById('view');
+  var shell = document.getElementById('shell');
+
+  /* ---------- styles ---------- */
+  var st = document.createElement('style');
+  st.textContent =
+    '.ww-cs{position:relative;width:100%}' +
+    '.ww-cs input{width:100%;box-sizing:border-box}' +
+    '.ww-cs-list{display:none;position:absolute;left:0;right:0;top:100%;z-index:9999;background:#fff;color:#0b2545;' +
+      'border:1px solid #c9d6e4;border-radius:10px;max-height:260px;overflow:auto;box-shadow:0 8px 22px rgba(0,0,0,.18);margin-top:2px}' +
+    '.ww-cs-item{padding:9px 12px;cursor:pointer;border-bottom:1px solid #eef2f7;font-size:14px}' +
+    '.ww-cs-item.on,.ww-cs-item:hover{background:#e3f2fd}' +
+    '.ww-cs-none{padding:9px 12px;color:#888;font-size:14px}' +
+    '#ww-wa-btn{position:fixed;right:16px;bottom:16px;z-index:9998;background:#25d366;color:#fff;border:0;border-radius:30px;' +
+      'padding:12px 18px;font:700 14px/1 inherit;font-family:inherit;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.25)}' +
+    '#ww-wa-panel{display:none;position:fixed;right:16px;bottom:66px;z-index:9998;width:340px;max-width:92vw;max-height:70vh;' +
+      'overflow:auto;background:#fff;color:#0b2545;border-radius:14px;box-shadow:0 10px 34px rgba(0,0,0,.3);font-family:inherit}' +
+    '@media (max-width:1000px){#ww-wa-btn{bottom:84px}#ww-wa-panel{bottom:134px}}';
+  document.head.appendChild(st);
+
+  function esc(t) {
+    return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  /* =====================================================
+     1. CUSTOMER SEARCH  (works on every page that has a
+        customer dropdown: New sale, Receive payment, ...)
+     ===================================================== */
+  function wantsSearch(sel) {
+    if (sel.dataset.wwCs || sel.multiple) return false;
+    var key = ((sel.id || '') + ' ' + (sel.name || '')).toLowerCase();
+    if (key.indexOf('cust') > -1 || key.indexOf('client') > -1) return true;
+    // also catch dropdowns whose first options read like "Select customer" / "Walk-in"
+    for (var i = 0; i < Math.min(2, sel.options.length); i++) {
+      if (/customer|walk-?in|client/i.test(sel.options[i].text)) return true;
+    }
+    return false;
+  }
+
+  function enhance(sel) {
+    sel.dataset.wwCs = '1';
+
+    // remove an old search box left behind if the app re-drew this dropdown
+    var prev = sel.previousElementSibling;
+    if (prev && prev.classList && prev.classList.contains('ww-cs')) prev.remove();
 
     var wrap = document.createElement('div');
-    wrap.style.cssText = 'position:relative;width:100%';
+    wrap.className = 'ww-cs';
     var box = document.createElement('input');
     box.type = 'text';
     box.autocomplete = 'off';
-    box.placeholder = 'Search customer: type phone or name...';
     box.className = sel.className;
-    box.style.cssText = 'width:100%;box-sizing:border-box;padding:8px 10px';
+    box.placeholder = 'Search customer: type phone or name...';
     var list = document.createElement('div');
-    list.style.cssText = 'display:none;position:absolute;left:0;right:0;top:100%;z-index:9999;background:#fff;' +
-      'border:1px solid #bbb;border-radius:6px;max-height:240px;overflow:auto;box-shadow:0 6px 16px rgba(0,0,0,.15)';
+    list.className = 'ww-cs-list';
     wrap.appendChild(box);
     wrap.appendChild(list);
     sel.parentNode.insertBefore(wrap, sel);
-    sel.style.display = 'none';           // hidden, but your form still uses it
+    sel.style.display = 'none';
 
-    var matches = [], active = -1;
+    var matches = [], active = 0;
 
-    function render() {
+    function selectedText() {
+      var o = sel.options[sel.selectedIndex];
+      return (o && o.value) ? o.text : '';
+    }
+    box.value = selectedText();
+
+    function digits(s) { return String(s).replace(/[\s\-+]/g, ''); }
+
+    function build() {
       var q = box.value.trim().toLowerCase();
-      var qd = q.replace(/[\s-]/g, '');
-      sel.value = '';                      // clear old choice while typing
-      if (!q) { list.style.display = 'none'; return; }
-      matches = Array.prototype.filter.call(sel.options, function (o) {
-        if (!o.value) return false;
-        var text = (o.text + ' ' + (o.dataset.phone || '')).toLowerCase();
-        return text.indexOf(q) > -1 || text.replace(/[\s-]/g, '').indexOf(qd) > -1;
-      }).slice(0, 10);
-      active = matches.length ? 0 : -1;
+      var opts = Array.prototype.slice.call(sel.options);
+      if (!q || q === selectedText().toLowerCase()) {
+        // nothing typed: offer the "no customer / walk-in" entry plus the first few customers
+        var blank = opts.filter(function (o) { return !o.value; });
+        var some = opts.filter(function (o) { return o.value; }).slice(0, 8);
+        matches = blank.concat(some);
+      } else {
+        var qd = digits(q);
+        matches = opts.filter(function (o) {
+          if (!o.value) return false;
+          var t = (o.text + ' ' + (o.dataset.phone || '')).toLowerCase();
+          return t.indexOf(q) > -1 || (qd && digits(t).indexOf(qd) > -1);
+        }).slice(0, 10);
+      }
+      active = 0;
       list.innerHTML = matches.length
         ? matches.map(function (o, i) {
-            return '<div data-i="' + i + '" style="padding:9px 12px;cursor:pointer;border-bottom:1px solid #eee;' +
-              (i === 0 ? 'background:#e3f2fd' : '') + '">' + o.text.replace(/</g, '&lt;') + '</div>';
+            return '<div class="ww-cs-item' + (i === 0 ? ' on' : '') + '" data-i="' + i + '">' +
+              esc(o.text || '(no customer)') + '</div>';
           }).join('')
-        : '<div style="padding:9px 12px;color:#888">No customer found</div>';
+        : '<div class="ww-cs-none">No customer found</div>';
       list.style.display = 'block';
     }
 
@@ -225,54 +346,68 @@
       var o = matches[i];
       if (!o) return;
       sel.value = o.value;
-      sel.dispatchEvent(new Event('change', { bubbles: true }));   // tells your system a customer was picked
-      box.value = o.text;
+      sel.dispatchEvent(new Event('input', { bubbles: true }));
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      box.value = o.value ? o.text : '';
       list.style.display = 'none';
     }
 
-    box.addEventListener('input', render);
+    box.addEventListener('focus', function () { box.select(); build(); });
+    box.addEventListener('input', build);
     box.addEventListener('keydown', function (e) {
-      var items = list.querySelectorAll('[data-i]');
+      var items = list.querySelectorAll('.ww-cs-item');
+      if (e.key === 'Escape') { list.style.display = 'none'; return; }
       if (!items.length) return;
       if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
         e.preventDefault();
         active = (active + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
-        for (var k = 0; k < items.length; k++) items[k].style.background = k === active ? '#e3f2fd' : '';
+        items.forEach(function (el, k) { el.classList.toggle('on', k === active); });
         items[active].scrollIntoView({ block: 'nearest' });
-      } else if (e.key === 'Enter') { e.preventDefault(); choose(active); }
-      else if (e.key === 'Escape') { list.style.display = 'none'; }
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        choose(active);
+      }
     });
     list.addEventListener('mousedown', function (e) {
-      var el = e.target.closest('[data-i]');
-      if (el) choose(+el.dataset.i);
+      var el = e.target.closest('.ww-cs-item');
+      if (el) { e.preventDefault(); choose(+el.dataset.i); }
     });
-    document.addEventListener('click', function (e) {
-      if (!wrap.contains(e.target)) list.style.display = 'none';
+    box.addEventListener('blur', function () {
+      setTimeout(function () {
+        list.style.display = 'none';
+        box.value = selectedText();     // show what is really selected
+      }, 120);
     });
   }
 
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
-  else init();
-  setTimeout(init, 1000);   // in case your form loads a moment later
-})();
-</script>
-  <script>
-(function () {
-  /* ============ SETTINGS - CHANGE IF NEEDED ============ */
-  // Option A: a URL that returns your unpaid customers as JSON, e.g. [{name, phone, amount}]
-  // Leave empty ('') to use Option B instead.
-  var UNPAID_URL = '';
-  // Option B: with UNPAID_URL empty, the script reads rows on the CURRENT page that
-  // contain one of these words (unpaid, pending...) and a phone number.
-  var UNPAID_WORDS = ['unpaid', 'pending', 'not paid', 'balance', 'due'];
-  var COMPANY = 'Wise Water';
-  var PAY_INFO = 'Please pay via M-PESA/Airtel Money to +254111818220.';
-  /* ====================================================== */
+  function scanCustomers() {
+    if (!view) return;
+    view.querySelectorAll('select').forEach(function (s) { if (wantsSearch(s)) enhance(s); });
+  }
 
-  var STORE = 'wa_reminders_sent';
+  /* =====================================================
+     2. "Prepared ... by <email>"  ->  name  (on screen)
+     ===================================================== */
+  function fixPreparedText() {
+    if (!view) return;
+    var w = document.createTreeWalker(view, NodeFilter.SHOW_TEXT, null), n;
+    while ((n = w.nextNode())) {
+      var v = n.nodeValue;
+      if (!v || v.toLowerCase().indexOf(OLD_EMAIL) === -1) continue;
+      var host = n.parentElement;
+      if (!host || /^(INPUT|TEXTAREA|SCRIPT|STYLE|OPTION)$/.test(host.tagName)) continue;
+      if (!/prepared/i.test(host.textContent)) continue;
+      n.nodeValue = v.replace(new RegExp(OLD_EMAIL.replace(/\./g, '\\.'), 'gi'), NAME);
+    }
+  }
+
+  /* =====================================================
+     3. WHATSAPP: unpaid customers
+     ===================================================== */
+  var STORE = 'ww_wa_reminders_sent';
   var sent = {};
   try { sent = JSON.parse(localStorage.getItem(STORE) || '{}'); } catch (e) {}
-  var today = new Date().toISOString().slice(0, 10);
+  function today() { return new Date().toISOString().slice(0, 10); }
 
   function fixPhone(p) {
     p = String(p || '').replace(/[^\d]/g, '');
@@ -281,40 +416,31 @@
     if (/^[17]\d{8}$/.test(p)) return '254' + p;
     return '';
   }
-  function esc(t) { return String(t == null ? '' : t).replace(/[&<>"']/g, function (c) {
-    return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
 
-  function readFromPage() {
+  function readUnpaid() {
     var out = [], seen = {};
-    document.querySelectorAll('tr').forEach(function (tr) {
-      var text = tr.innerText || '';
+    if (!view) return out;
+    view.querySelectorAll('tr').forEach(function (tr) {
+      var text = tr.innerText || tr.textContent || '';
       var low = text.toLowerCase();
       if (!UNPAID_WORDS.some(function (w) { return low.indexOf(w) > -1; })) return;
       var m = text.replace(/[\s-]/g, '').match(/(?:\+?254|0)[17]\d{8}/);
       if (!m) return;
       var phone = fixPhone(m[0]);
       if (!phone || seen[phone]) return;
+      var amt = text.match(/(?:ksh|kes)\.?\s*([\d,]+(?:\.\d+)?)/i);
+      if (amt && parseFloat(amt[1].replace(/,/g, '')) === 0) return;   // nothing owed
       seen[phone] = 1;
       var cells = tr.querySelectorAll('td');
-      var name = cells.length ? cells[0].innerText.trim() : 'Customer';
-      if (/^\d+$/.test(name) && cells[1]) name = cells[1].innerText.trim();
-      var amt = text.match(/(?:ksh|kes)\.?\s*([\d,]+)/i);
+      var txt = function (el) { return (el.innerText || el.textContent || '').trim(); };
+      var name = cells.length ? txt(cells[0]) : 'Customer';
+      if (/^\d+$/.test(name) && cells[1]) name = txt(cells[1]);
       out.push({ name: name, phone: phone, amount: amt ? amt[1] : '' });
     });
     return out;
   }
 
-  function load(cb) {
-    if (!UNPAID_URL) return cb(readFromPage());
-    fetch(UNPAID_URL).then(function (r) { return r.json(); }).then(function (d) {
-      var list = Array.isArray(d) ? d : (d.data || d.customers || []);
-      cb(list.map(function (c) {
-        return { name: c.name || c.fullName, phone: fixPhone(c.phone || c.phoneNumber), amount: c.amount || c.balance || c.total || '' };
-      }).filter(function (c) { return c.phone; }));
-    }).catch(function () { cb([]); });
-  }
-
-  function link(c) {
+  function waLink(c) {
     var msg = 'Hello ' + c.name + ', this is a friendly reminder from ' + COMPANY + '. ' +
       (c.amount ? 'You have an unpaid balance of KSh ' + c.amount + '. ' : 'You have an unpaid balance. ') +
       PAY_INFO + ' Thank you!';
@@ -322,85 +448,85 @@
   }
 
   var btn = document.createElement('button');
-  btn.style.cssText = 'position:fixed;right:18px;bottom:18px;z-index:99999;background:#25d366;color:#fff;border:0;' +
-    'border-radius:30px;padding:12px 18px;font-size:15px;font-weight:bold;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,.25)';
-  document.body.appendChild(btn);
-
+  btn.id = 'ww-wa-btn';
+  btn.type = 'button';
   var panel = document.createElement('div');
-  panel.style.cssText = 'display:none;position:fixed;right:18px;bottom:70px;z-index:99999;width:340px;max-width:92vw;' +
-    'max-height:70vh;overflow:auto;background:#fff;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.3);font-family:Arial,sans-serif';
+  panel.id = 'ww-wa-panel';
+  document.body.appendChild(btn);
   document.body.appendChild(panel);
+  var unpaid = [];
 
-  var customers = [];
-
-  function draw() {
-    var due = customers.filter(function (c) { return sent[c.phone] !== today; });
+  function drawWa() {
+    var d = today();
+    var due = unpaid.filter(function (c) { return sent[c.phone] !== d; });
     btn.textContent = 'WhatsApp unpaid (' + due.length + ')';
-    var html = '<div style="padding:12px 14px;border-bottom:1px solid #eee;font-weight:bold">Unpaid customers</div>';
-    if (!customers.length) html += '<div style="padding:14px;color:#777">No unpaid customers found on this page.</div>';
-    customers.forEach(function (c, i) {
-      var done = sent[c.phone] === today;
+    var html = '<div style="padding:12px 14px;border-bottom:1px solid #eee;font-weight:700">Unpaid customers on this page</div>';
+    if (!unpaid.length) {
+      html += '<div style="padding:14px;color:#777;font-size:14px">None found here. Open the Customers or Sales history page to list customers who owe money.</div>';
+    }
+    unpaid.forEach(function (c, i) {
+      var done = sent[c.phone] === d;
       html += '<div style="padding:10px 14px;border-bottom:1px solid #f0f0f0;display:flex;align-items:center;gap:8px">' +
-        '<div style="flex:1"><b>' + esc(c.name) + '</b><br><small style="color:#666">' + esc(c.phone) +
+        '<div style="flex:1;font-size:14px"><b>' + esc(c.name) + '</b><br><small style="color:#666">' + esc(c.phone) +
         (c.amount ? ' &bull; KSh ' + esc(c.amount) : '') + '</small></div>' +
         (done ? '<span style="color:#2e7d32;font-size:13px">Sent today</span>'
               : '<a data-i="' + i + '" href="#" style="background:#25d366;color:#fff;padding:7px 12px;border-radius:8px;text-decoration:none;font-size:13px">Send</a>') +
         '</div>';
     });
-    if (due.length > 1) html += '<div style="padding:12px 14px"><a id="waNext" href="#" style="display:block;text-align:center;background:#1565c0;color:#fff;padding:10px;border-radius:8px;text-decoration:none">Open next customer</a></div>';
+    if (due.length > 1) {
+      html += '<div style="padding:12px 14px"><a id="ww-wa-next" href="#" style="display:block;text-align:center;background:#073f5f;color:#fff;padding:10px;border-radius:8px;text-decoration:none;font-size:14px">Open next customer</a></div>';
+    }
     panel.innerHTML = html;
   }
 
   function markAndOpen(c) {
-    sent[c.phone] = today;
+    sent[c.phone] = today();
     try { localStorage.setItem(STORE, JSON.stringify(sent)); } catch (e) {}
-    window.open(link(c), '_blank');
-    draw();
+    window.open(waLink(c), '_blank');
+    drawWa();
   }
 
   panel.addEventListener('click', function (e) {
-    var a = e.target.closest('a'); if (!a) return;
+    var a = e.target.closest('a');
+    if (!a) return;
     e.preventDefault();
-    if (a.id === 'waNext') {
-      var next = customers.filter(function (c) { return sent[c.phone] !== today; })[0];
+    if (a.id === 'ww-wa-next') {
+      var d = today();
+      var next = unpaid.filter(function (c) { return sent[c.phone] !== d; })[0];
       if (next) markAndOpen(next);
-    } else if (a.dataset.i != null) markAndOpen(customers[+a.dataset.i]);
+    } else if (a.dataset.i != null) {
+      markAndOpen(unpaid[+a.dataset.i]);
+    }
   });
   btn.addEventListener('click', function () {
-    load(function (list) { customers = list; draw(); panel.style.display = panel.style.display === 'none' ? 'block' : 'none'; });
+    unpaid = readUnpaid();
+    drawWa();
+    panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
   });
 
-  load(function (list) { customers = list; draw(); });
-  setTimeout(function () { load(function (list) { customers = list; draw(); }); }, 1500);
-})();
-</script>
-  <script>
-(function () {
-  var NAME = 'Eng.Kedir';
-  var OLD_EMAIL = /canadaimgov@gmail\.com/gi;          // the email to replace
-  var PREPARED_BY = /(prepared\s*by\s*:?\s*)([^\s<]+@[^\s<]+)/gi;  // "Prepared by: any email"
-
-  function fix(root) {
-    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, null);
-    var node;
-    while ((node = walker.nextNode())) {
-      var t = node.nodeValue;
-      if (!t) continue;
-      var n = t.replace(OLD_EMAIL, NAME).replace(PREPARED_BY, '$1' + NAME);
-      if (n !== t) node.nodeValue = n;
-    }
-    root.querySelectorAll && root.querySelectorAll('input,textarea').forEach(function (el) {
-      if (el.value && OLD_EMAIL.test(el.value)) el.value = el.value.replace(OLD_EMAIL, NAME);
-      OLD_EMAIL.lastIndex = 0;
-    });
+  function showWaOnlyWhenLoggedIn() {
+    var on = shell && !shell.hidden;
+    btn.style.display = on ? '' : 'none';
+    if (!on) panel.style.display = 'none';
   }
 
-  function run() { fix(document.body); }
+  /* ---------- run everything, keep it up to date ---------- */
+  var timer;
+  function runAll() {
+    scanCustomers();
+    fixPreparedText();
+    unpaid = readUnpaid();
+    drawWa();
+    showWaOnlyWhenLoggedIn();
+  }
+  function schedule() { clearTimeout(timer); timer = setTimeout(runAll, 80); }
 
-  run();
-  window.addEventListener('beforeprint', run);                     // before printing / save as PDF
-  new MutationObserver(run).observe(document.body, { childList: true, subtree: true, characterData: true });
+  if (view) new MutationObserver(schedule).observe(view, { childList: true, subtree: true, characterData: true });
+  if (shell) new MutationObserver(showWaOnlyWhenLoggedIn).observe(shell, { attributes: true, attributeFilter: ['hidden'] });
+  window.addEventListener('hashchange', schedule);
+  window.addEventListener('beforeprint', runAll);
+  runAll();
 })();
-</script>
+  </script>
 </body>
 </html>
